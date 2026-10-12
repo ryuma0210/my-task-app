@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>クラウド・タスク管理</title>
+    <!-- Firebase SDK (Compat v10) -->
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f9; margin: 0; padding: 20px; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; background: white; padding: 24px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+        h2 { text-align: center; color: #2c3e50; margin-bottom: 8px; }
+        .status { text-align: center; font-size: 13px; color: #27ae60; margin-bottom: 20px; font-weight: bold; }
+        .form-group { margin-bottom: 16px; }
+        label { display: block; font-weight: bold; margin-bottom: 6px; font-size: 14px; }
+        input[type="text"], textarea, select, input[type="datetime-local"] { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; font-size: 14px; }
+        textarea { resize: vertical; height: 80px; }
+        .priority-options { display: flex; gap: 10px; flex-wrap: wrap; }
+        .priority-options label { font-weight: normal; font-size: 13px; background: #f8f9fa; padding: 6px 10px; border-radius: 4px; border: 1px solid #e9ecef; cursor: pointer; }
+        button { width: 100%; padding: 12px; border: none; border-radius: 6px; font-size: 16px; font-weight: bold; cursor: pointer; margin-top: 8px; }
+        .btn-add { background: #007bff; color: white; }
+        .btn-add:hover { background: #0056b3; }
+        .btn-notif { background: #28a745; color: white; margin-top: 10px; }
+        .btn-notif:hover { background: #218838; }
+        .task-card { background: #fff; border: 1px solid #e1e4e8; border-left: 5px solid #007bff; padding: 14px; border-radius: 6px; margin-top: 12px; position: relative; }
+        .task-card.priority-急ぎ { border-left-color: #dc3545; }
+        .task-card.priority-時間を取る { border-left-color: #ffc107; }
+        .task-card.priority-任せる・後から { border-left-color: #28a745; }
+        .task-card.priority-検討 { border-left-color: #17a2b8; }
+        .task-title { font-size: 16px; font-weight: bold; margin-bottom: 4px; }
+        .task-content { font-size: 14px; color: #555; margin-bottom: 8px; white-space: pre-wrap; }
+        .task-meta { font-size: 12px; color: #777; display: flex; justify-content: space-between; align-items: center; }
+        .btn-delete { background: #ff4d4d; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+        .btn-delete:hover { background: #cc0000; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>クラウド・タスク管理</h2>
+    <div id="connectionStatus" class="status">🔄 Firebase接続中...</div>
+
+    <!-- タスク入力フォーム -->
+    <div class="form-group">
+        <label>タイトル</label>
+        <input type="text" id="taskTitle" placeholder="例: 天草の契約">
+    </div>
+
+    <div class="form-group">
+        <label>内容</label>
+        <textarea id="taskContent" placeholder="タスクの詳細や手順..."></textarea>
+    </div>
+
+    <div class="form-group">
+        <label>優先度</label>
+        <div class="priority-options">
+            <label><input type="radio" name="priority" value="急ぎ"> 🔴 急ぎ</label>
+            <label><input type="radio" name="priority" value="時間を取る" checked> 🟡 時間を取る</label>
+            <label><input type="radio" name="priority" value="任せる・後から"> 🟢 任せる・後から</label>
+            <label><input type="radio" name="priority" value="検討"> 🔵 検討</label>
+        </div>
+    </div>
+
+    <div class="form-group">
+        <label>スケジュール種別</label>
+        <select id="scheduleType" onchange="toggleScheduleFields()">
+            <option value="daily">毎日（※カレンダーには登録されません）</option>
+            <option value="specific">指定日（※Googleカレンダーに自動登録されます）</option>
+        </select>
+    </div>
+
+    <div class="form-group" id="dateFieldGroup" style="display: none;">
+        <label>日時指定</label>
+        <input type="datetime-local" id="taskDate">
+    </div>
+
+    <div class="form-group">
+        <label>メモ</label>
+        <textarea id="taskMemo" placeholder="補足メモなど..."></textarea>
+    </div>
+
+    <button class="btn-add" onclick="addTask()">タスクを追加</button>
+    <button class="btn-notif" onclick="requestNotificationPermission()">🔔 毎日の通知を受け取る (8時/13時/19時)</button>
+
+    <hr style="margin: 24px 0; border: none; border-top: 1px solid #eee;">
+
+    <div id="taskList">
+        <p style="text-align: center; color: #888;">タスクはまだありません</p>
+    </div>
+</div>
+
+<script>
+    // Firebase 設定
+    const firebaseConfig = {
+        projectId: "my-task-app-64c37"
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+
+    // 接続確認
+    db.collection("tasks").limit(1).get().then(() => {
+        document.getElementById("connectionStatus").innerText = "✅ Firebase接続完了（リアルタイム同期中）";
+    }).catch(err => {
+        document.getElementById("connectionStatus").innerText = "❌ 接続エラー: " + err.message;
+        document.getElementById("connectionStatus").style.color = "red";
+    });
+
+    function toggleScheduleFields() {
+        const type = document.getElementById("scheduleType").value;
+        document.getElementById("dateFieldGroup").style.display = (type === "specific") ? "block" : "none";
+    }
+
+    // タスク追加処理
+    function addTask() {
+        const title = document.getElementById("taskTitle").value.trim();
+        const content = document.getElementById("taskContent").value.trim();
+        const priority = document.querySelector('input[name="priority"]:checked').value;
+        const scheduleType = document.getElementById("scheduleType").value;
+        const taskDate = document.getElementById("taskDate").value;
+        const memo = document.getElementById("taskMemo").value.trim();
+
+        if (!title) {
+            alert("タイトルを入力してください");
+            return;
+        }
+
+        const newTask = {
+            title,
+            content,
+            priority,
+            scheduleType,
+            taskDate: scheduleType === 'specific' ? taskDate : null,
+            memo,
+            completed: false,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        };
+
+        db.collection("tasks").add(newTask).then(() => {
+            // フォームリセット
+            document.getElementById("taskTitle").value = "";
+            document.getElementById("taskContent").value = "";
+            document.getElementById("taskMemo").value = "";
+            document.getElementById("scheduleType").value = "daily";
+            toggleScheduleFields();
+
+            // 指定日の場合はGoogleカレンダー登録用のリンクを案内
+            if (scheduleType === 'specific' && taskDate) {
+                const gCalUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(title)}&details=${encodeURIComponent(content + (memo ? '\nメモ: ' + memo : ''))}&dates=${taskDate.replace(/[-:]/g, '')}00/${taskDate.replace(/[-:]/g, '')}00`;
+                if (confirm("タスクを追加しました！Googleカレンダーにこの予定を登録しますか？")) {
+                    window.open(gCalUrl, '_blank');
+                }
+            }
+        }).catch(err => {
+            alert("追加に失敗しました: " + err.message);
+        });
+    }
+
+    // タスク削除
+    function deleteTask(id) {
+        if (confirm("このタスクを削除しますか？")) {
+            db.collection("tasks").doc(id).delete();
+        }
+    }
+
+    // リアルタイムリスナーでタスク一覧を描画
+    db.collection("tasks").orderBy("createdAt", "desc").onSnapshot(snapshot => {
+        const taskList = document.getElementById("taskList");
+        if (snapshot.empty) {
+            taskList.innerHTML = '<p style="text-align: center; color: #888;">タスクはまだありません</p>';
+            return;
+        }
+
+        let html = "";
+        snapshot.forEach(doc => {
+            const task = doc.data();
+            const id = doc.id;
+            html += `
+                <div class="task-card priority-${task.priority}">
+                    <div class="task-title">${escapeHtml(task.title)}</div>
+                    <div class="task-content">${escapeHtml(task.content)}</div>
+                    ${task.memo ? `<div style="font-size:13px; color:#666; margin-bottom:6px;"><b>メモ:</b> ${escapeHtml(task.memo)}</div>` : ''}
+                    <div class="task-meta">
+                        <span>優先度: <b>${task.priority}</b> | 予定: ${task.scheduleType === 'daily' ? '毎日（8時/13時/19時通知）' : task.taskDate || '指定日'}</span>
+                        <button class="btn-delete" onclick="deleteTask('${id}')">削除</button>
+                    </div>
+                </div>
+            `;
+        });
+        taskList.innerHTML = html;
+    });
+
+    function escapeHtml(str) {
+        return str.replace(/[&<>"']/g, match => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[match]));
+    }
+
+    // 通知許可リクエストとService Worker登録
+    function requestNotificationPermission() {
+        if (!("Notification" in window)) {
+            alert("このブラウザはプッシュ通知に対応していません。");
+            return;
+        }
+        Notification.requestPermission().then(permission => {
+            if (permission === "granted") {
+                alert("通知が許可されました！毎日 8時・13時・19時に通知が届きます。");
+                if ('serviceWorker' in navigator) {
+                    navigator.serviceWorker.register('sw.js').then(reg => {
+                        console.log('Service Worker 登録成功:', reg);
+                    });
+                }
+            } else {
+                alert("通知の許可が拒否されました。ブラウザの設定から許可してください。");
+            }
+        });
+    }
+</script>
+
+</body>
+</html>
