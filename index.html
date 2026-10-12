@@ -44,9 +44,23 @@
             font-size: 16px;
             font-weight: bold;
             cursor: pointer;
-            margin-bottom: 20px;
+            margin-bottom: 10px;
         }
         button.add-btn:hover { background-color: #0056b3; }
+
+        button.notif-btn {
+            width: 100%;
+            padding: 10px;
+            background-color: #28a745;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            margin-bottom: 20px;
+        }
+        button.notif-btn:hover { background-color: #218838; }
 
         .task-card {
             background: #fafbfc;
@@ -94,6 +108,7 @@
         <textarea id="taskContent" placeholder="内容（詳細）を入力..."></textarea>
     </div>
     <button class="add-btn" onclick="addNewTask()">タスクを追加</button>
+    <button class="notif-btn" onclick="requestNotification()">🔔 通知を受け取る</button>
 
     <div id="taskList"></div>
 </div>
@@ -102,9 +117,10 @@
 <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
     import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+    import { getMessaging, getToken } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging.js";
 
-    // ★ここにコピーしたご自身のfirebaseConfigを貼り付けてください
-   const firebaseConfig = {
+    // ご自身のfirebaseConfigに書き換えてください（すでに設定済みのものをお使いください）
+const firebaseConfig = {
     apiKey: "AIzaSyCZMlFsuz5FiR3nRwybwlOvcoHD2q2fln8",
     authDomain: "my-task-app-64c37.firebaseapp.com",
     projectId: "my-task-app-64c37",
@@ -117,6 +133,7 @@
     // Firebase初期化
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
+    const messaging = getMessaging(app);
 
     document.getElementById('statusBar').textContent = '✅ Firebase接続完了（リアルタイム同期中）';
 
@@ -147,6 +164,25 @@
         }
     };
 
+    // 通知許可の取得
+    window.requestNotification = async function() {
+        try {
+            const permission = await Notification.requestPermission();
+            if (permission === 'granted') {
+                alert('通知が許可されました！');
+                if ('serviceWorker' in navigator) {
+                    const registration = await navigator.serviceWorker.register('./sw.js');
+                    console.log('Service Worker 登録成功:', registration);
+                }
+            } else {
+                alert('通知がブロックされました。ブラウザの設定から許可してください。');
+            }
+        } catch (error) {
+            console.error('通知設定エラー:', error);
+            alert('通知の設定に失敗しました');
+        }
+    };
+
     // チェック状態の更新
     window.toggleCheck = async function(id, slot, status) {
         try {
@@ -168,7 +204,7 @@
         }
     };
 
-    // リアルタイムリスナー（データ変更を自動検知）
+    // リアルタイムリスナー
     const q = query(collection(db, "tasks"), orderBy("createdAt", "desc"));
     onSnapshot(q, (snapshot) => {
         const listEl = document.getElementById('taskList');
