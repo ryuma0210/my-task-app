@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>クラウド・タスク管理</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #f4f6f8;
+            margin: 0;
+            padding: 15px;
+            color: #333;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+        }
+        h2 { text-align: center; color: #2c3e50; margin-top: 0; }
+        .status-bar { text-align: center; font-size: 12px; color: #e67e22; margin-bottom: 15px; }
+        
+        .form-group { margin-bottom: 12px; }
+        input[type="text"], textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+        textarea { resize: vertical; height: 60px; }
+        
+        button.add-btn {
+            width: 100%;
+            padding: 12px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            margin-bottom: 20px;
+        }
+        button.add-btn:hover { background-color: #0056b3; }
+
+        .task-card {
+            background: #fafbfc;
+            border: 1px solid #e1e4e8;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 12px;
+        }
+        .task-title { font-weight: bold; font-size: 16px; color: #111; margin-bottom: 5px; }
+        .task-content { font-size: 14px; color: #555; margin-bottom: 10px; white-space: pre-wrap; }
+        
+        .checks {
+            display: flex;
+            gap: 15px;
+            border-top: 1px solid #eee;
+            padding-top: 10px;
+        }
+        .checks label {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 14px;
+            cursor: pointer;
+        }
+        .delete-btn {
+            background: none;
+            border: none;
+            color: #dc3545;
+            cursor: pointer;
+            font-size: 12px;
+            float: right;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>クラウド・タスク管理</h2>
+    <div id="statusBar" class="status-bar">Firebase接続中...</div>
+    
+    <div class="form-group">
+        <input type="text" id="taskTitle" placeholder="タイトルを入力...">
+    </div>
+    <div class="form-group">
+        <textarea id="taskContent" placeholder="内容（詳細）を入力..."></textarea>
+    </div>
+    <button class="add-btn" onclick="addNewTask()">タスクを追加</button>
+
+    <div id="taskList"></div>
+</div>
+
+<!-- Firebase SDK -->
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+    // ★ここにコピーしたご自身のfirebaseConfigを貼り付けてください
+   const firebaseConfig = {
+    apiKey: "AIzaSyCZMlFsuz5FiR3nRwybwlOvcoHD2q2fln8",
+    authDomain: "my-task-app-64c37.firebaseapp.com",
+    projectId: "my-task-app-64c37",
+    storageBucket: "my-task-app-64c37.firebasestorage.app",
+    messagingSenderId: "4362720677",
+    appId: "1:4362720677:web:3c254893f74ceb1c57844c",
+    measurementId: "G-K5GYT348QB"
+    };
+
+    // Firebase初期化
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    document.getElementById('statusBar').textContent = '✅ Firebase接続完了（リアルタイム同期中）';
+
+    // タスク追加
+    window.addNewTask = async function() {
+        const titleInput = document.getElementById('taskTitle');
+        const contentInput = document.getElementById('taskContent');
+        
+        if (!titleInput.value.trim()) {
+            alert('タイトルを入力してください');
+            return;
+        }
+
+        try {
+            await addDoc(collection(db, "tasks"), {
+                title: titleInput.value.trim(),
+                content: contentInput.value.trim(),
+                morning: false,
+                afternoon: false,
+                evening: false,
+                createdAt: Date.now()
+            });
+            titleInput.value = '';
+            contentInput.value = '';
+        } catch (e) {
+            console.error("追加エラー: ", e);
+            alert('追加に失敗しました');
+        }
+    };
+
+    // チェック状態の更新
+    window.toggleCheck = async function(id, slot, status) {
+        try {
+            const taskRef = doc(db, "tasks", id);
+            await updateDoc(taskRef, { [slot]: status });
+        } catch (e) {
+            console.error("更新エラー: ", e);
+        }
+    };
+
+    // タスク削除
+    window.deleteTask = async function(id) {
+        if (confirm('削除しますか？')) {
+            try {
+                await deleteDoc(doc(db, "tasks", id));
+            } catch (e) {
+                console.error("削除エラー: ", e);
+            }
+        }
+    };
+
+    // リアルタイムリスナー（データ変更を自動検知）
+    const q = query(collection(db, "tasks"), orderBy("createdAt", "desc"));
+    onSnapshot(q, (snapshot) => {
+        const listEl = document.getElementById('taskList');
+        listEl.innerHTML = '';
+
+        if (snapshot.empty) {
+            listEl.innerHTML = '<p style="text-align:center; color:#888;">タスクはまだありません</p>';
+            return;
+        }
+
+        snapshot.forEach((docSnap) => {
+            const data = docSnap.data();
+            
+            const card = document.createElement('div');
+            card.className = 'task-card';
+            card.innerHTML = `
+                <button class="delete-btn" onclick="deleteTask('${docSnap.id}')">削除</button>
+                <div class="task-title">${escapeHTML(data.title)}</div>
+                <div class="task-content">${escapeHTML(data.content || '')}</div>
+                <div class="checks">
+                    <label><input type="checkbox" ${data.morning ? 'checked' : ''} onchange="toggleCheck('${docSnap.id}', 'morning', this.checked)"> 朝</label>
+                    <label><input type="checkbox" ${data.afternoon ? 'checked' : ''} onchange="toggleCheck('${docSnap.id}', 'afternoon', this.checked)"> 昼</label>
+                    <label><input type="checkbox" ${data.evening ? 'checked' : ''} onchange="toggleCheck('${docSnap.id}', 'evening', this.checked)"> 晩</label>
+                </div>
+            `;
+            listEl.appendChild(card);
+        });
+    });
+
+    function escapeHTML(str) {
+        return str.replace(/[&'`"<>]/g, function(match) {
+            return {
+                '&': '&amp;',
+                "'": '&#x27;',
+                '`': '&#x60;',
+                '"': '&quot;',
+                '<': '&lt;',
+                '>': '&gt;',
+            }[match]
+        });
+    }
+</script>
+
+</body>
+</html>
