@@ -22,6 +22,8 @@
         button { width: 100%; padding: 12px; border: none; border-radius: 6px; font-size: 16px; font-weight: bold; cursor: pointer; margin-top: 8px; }
         .btn-add { background: #007bff; color: white; }
         .btn-add:hover { background: #0056b3; }
+        .btn-cancel { background: #6c757d; color: white; display: none; }
+        .btn-cancel:hover { background: #5a6268; }
         .btn-notif { background: #28a745; color: white; margin-top: 10px; }
         .btn-notif:hover { background: #218838; }
         .task-card { background: #fff; border: 1px solid #e1e4e8; border-left: 5px solid #007bff; padding: 14px; border-radius: 6px; margin-top: 12px; position: relative; }
@@ -31,18 +33,23 @@
         .task-card.priority-検討 { border-left-color: #17a2b8; }
         .task-title { font-size: 16px; font-weight: bold; margin-bottom: 4px; }
         .task-content { font-size: 14px; color: #555; margin-bottom: 8px; white-space: pre-wrap; }
-        .task-meta { font-size: 12px; color: #777; display: flex; justify-content: space-between; align-items: center; }
-        .btn-delete { background: #ff4d4d; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+        .task-meta { font-size: 12px; color: #777; display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
+        .task-actions { display: flex; gap: 6px; }
+        .btn-edit { background: #ffc107; color: #333; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold; }
+        .btn-edit:hover { background: #e0a800; }
+        .btn-delete { background: #ff4d4d; color: white; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold; }
         .btn-delete:hover { background: #cc0000; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h2>クラウド・タスク管理</h2>
+    <h2 id="formHeading">クラウド・タスク管理</h2>
     <div id="connectionStatus" class="status">🔄 Firebase接続中...</div>
 
-    <!-- タスク入力フォーム -->
+    <!-- タスク入力・編集フォーム -->
+    <input type="hidden" id="editingTaskId" value="">
+
     <div class="form-group">
         <label>タイトル</label>
         <input type="text" id="taskTitle" placeholder="例: 天草の契約">
@@ -81,7 +88,8 @@
         <textarea id="taskMemo" placeholder="補足メモなど..."></textarea>
     </div>
 
-    <button class="btn-add" onclick="addTask()">タスクを追加</button>
+    <button id="submitBtn" class="btn-add" onclick="saveTask()">タスクを追加</button>
+    <button id="cancelBtn" class="btn-cancel" onclick="resetForm()">編集をキャンセル</button>
     <button class="btn-notif" onclick="requestNotificationPermission()">🔔 毎日の通知を受け取る (8時/13時/19時)</button>
 
     <hr style="margin: 24px 0; border: none; border-top: 1px solid #eee;">
@@ -113,11 +121,13 @@
         document.getElementById("dateFieldGroup").style.display = (type === "specific") ? "block" : "none";
     }
 
-    // タスク追加処理
-    function addTask() {
+    // タスクの追加または更新を保存
+    function saveTask() {
+        const editingId = document.getElementById("editingTaskId").value;
         const title = document.getElementById("taskTitle").value.trim();
         const content = document.getElementById("taskContent").value.trim();
-        const priority = document.querySelector('input[name="priority"]:checked').value;
+        const priorityInput = document.querySelector('input[name="priority"]:checked');
+        const priority = priorityInput ? priorityInput.value : "時間を取る";
         const scheduleType = document.getElementById("scheduleType").value;
         const taskDate = document.getElementById("taskDate").value;
         const memo = document.getElementById("taskMemo").value.trim();
@@ -127,35 +137,90 @@
             return;
         }
 
-        const newTask = {
+        const taskData = {
             title,
             content,
             priority,
             scheduleType,
             taskDate: scheduleType === 'specific' ? taskDate : null,
             memo,
-            completed: false,
-            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         };
 
-        db.collection("tasks").add(newTask).then(() => {
-            // フォームリセット
-            document.getElementById("taskTitle").value = "";
-            document.getElementById("taskContent").value = "";
-            document.getElementById("taskMemo").value = "";
-            document.getElementById("scheduleType").value = "daily";
-            toggleScheduleFields();
-
-            // 指定日の場合はGoogleカレンダー登録用のリンクを案内
-            if (scheduleType === 'specific' && taskDate) {
-                const gCalUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(title)}&details=${encodeURIComponent(content + (memo ? '\nメモ: ' + memo : ''))}&dates=${taskDate.replace(/[-:]/g, '')}00/${taskDate.replace(/[-:]/g, '')}00`;
-                if (confirm("タスクを追加しました！Googleカレンダーにこの予定を登録しますか？")) {
-                    window.open(gCalUrl, '_blank');
+        if (editingId) {
+            // 編集モード（上書き）
+            db.collection("tasks").doc(editingId).update(taskData).then(() => {
+                alert("タスクを更新しました！");
+                resetForm();
+            }).catch(err => {
+                alert("更新に失敗しました: " + err.message);
+            });
+        } else {
+            // 新規追加モード
+            taskData.createdAt = firebase.firestore.FieldValue.serverTimestamp();
+            taskData.completed = false;
+            
+            db.collection("tasks").add(taskData).then(() => {
+                resetForm();
+                // 指定日の場合はGoogleカレンダー登録用のリンクを案内
+                if (scheduleType === 'specific' && taskDate) {
+                    const gCalUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(title)}&details=${encodeURIComponent(content + (memo ? '\nメモ: ' + memo : ''))}&dates=${taskDate.replace(/[-:]/g, '')}00/${taskDate.replace(/[-:]/g, '')}00`;
+                    if (confirm("タスクを追加しました！Googleカレンダーにこの予定を登録しますか？")) {
+                        window.open(gCalUrl, '_blank');
+                    }
                 }
-            }
-        }).catch(err => {
-            alert("追加に失敗しました: " + err.message);
+            }).catch(err => {
+                alert("追加に失敗しました: " + err.message);
+            });
+        }
+    }
+
+    // 編集モードに入る（フォームにデータをセットする）
+    function editTask(id, title, content, priority, scheduleType, taskDate, memo) {
+        document.getElementById("editingTaskId").value = id;
+        document.getElementById("taskTitle").value = title;
+        document.getElementById("taskContent").value = content;
+        document.getElementById("scheduleType").value = scheduleType;
+        document.getElementById("taskDate").value = taskDate || "";
+        document.getElementById("taskMemo").value = memo || "";
+
+        // 優先度のラジオボタンを選択
+        const radios = document.querySelectorAll('input[name="priority"]');
+        radios.forEach(r => {
+            r.checked = (r.value === priority);
         });
+
+        toggleScheduleFields();
+
+        // フォームの見た目を編集用に変更
+        document.getElementById("formHeading").innerText = "✏️ タスクの編集";
+        const submitBtn = document.getElementById("submitBtn");
+        submitBtn.innerText = "変更を保存する";
+        submitBtn.className = "btn-add";
+        submitBtn.style.backgroundColor = "#ffc107";
+        submitBtn.style.color = "#333";
+        document.getElementById("cancelBtn").style.display = "block";
+
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    // フォームと編集状態のリセット
+    function resetForm() {
+        document.getElementById("editingTaskId").value = "";
+        document.getElementById("taskTitle").value = "";
+        document.getElementById("taskContent").value = "";
+        document.getElementById("taskMemo").value = "";
+        document.getElementById("scheduleType").value = "daily";
+        document.getElementById("taskDate").value = "";
+        document.querySelector('input[name="priority"][value="時間を取る"]').checked = true;
+        toggleScheduleFields();
+
+        document.getElementById("formHeading").innerText = "クラウド・タスク管理";
+        const submitBtn = document.getElementById("submitBtn");
+        submitBtn.innerText = "タスクを追加";
+        submitBtn.style.backgroundColor = "#007bff";
+        submitBtn.style.color = "white";
+        document.getElementById("cancelBtn").style.display = "none";
     }
 
     // タスク削除
@@ -177,14 +242,22 @@
         snapshot.forEach(doc => {
             const task = doc.data();
             const id = doc.id;
+            const priority = task.priority || "時間を取る";
+            const scheduleType = task.scheduleType || "daily";
+            const taskDate = task.taskDate || "";
+            const memo = task.memo || "";
+
             html += `
-                <div class="task-card priority-${task.priority}">
-                    <div class="task-title">${escapeHtml(task.title)}</div>
-                    <div class="task-content">${escapeHtml(task.content)}</div>
-                    ${task.memo ? `<div style="font-size:13px; color:#666; margin-bottom:6px;"><b>メモ:</b> ${escapeHtml(task.memo)}</div>` : ''}
+                <div class="task-card priority-${escapeHtml(priority)}">
+                    <div class="task-title">${escapeHtml(task.title || '')}</div>
+                    <div class="task-content">${escapeHtml(task.content || '')}</div>
+                    ${memo ? `<div style="font-size:13px; color:#666; margin-bottom:6px;"><b>メモ:</b> ${escapeHtml(memo)}</div>` : ''}
                     <div class="task-meta">
-                        <span>優先度: <b>${task.priority}</b> | 予定: ${task.scheduleType === 'daily' ? '毎日（8時/13時/19時通知）' : task.taskDate || '指定日'}</span>
-                        <button class="btn-delete" onclick="deleteTask('${id}')">削除</button>
+                        <span>優先度: <b>${escapeHtml(priority)}</b> | 予定: ${scheduleType === 'daily' ? '毎日（8時/13時/19時通知）' : escapeHtml(taskDate)}</span>
+                        <div class="task-actions">
+                            <button class="btn-edit" onclick="editTask('${id}', '${escapeAttr(task.title)}', '${escapeAttr(task.content)}', '${escapeAttr(priority)}', '${escapeAttr(scheduleType)}', '${escapeAttr(taskDate)}', '${escapeAttr(memo)}')">編集</button>
+                            <button class="btn-delete" onclick="deleteTask('${id}')">削除</button>
+                        </div>
                     </div>
                 </div>
             `;
@@ -193,7 +266,11 @@
     });
 
     function escapeHtml(str) {
-        return str.replace(/[&<>"']/g, match => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[match]));
+        return String(str).replace(/[&<>"']/g, match => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[match]));
+    }
+
+    function escapeAttr(str) {
+        return String(str).replace(/'/g, "\\'").replace(/"/g, '&quot;');
     }
 
     // 通知許可リクエストとService Worker登録
